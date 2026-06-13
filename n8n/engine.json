@@ -1,19 +1,14 @@
 {
-  "name": "Leadvyne · Bot (common, multi-tenant)",
+  "name": "Leadvyne · Engine (shared sub-workflow)",
   "nodes": [
     {
-      "parameters": { "httpMethod": "POST", "path": "leadvyne-bot", "responseMode": "responseNode", "options": {} },
-      "id": "wh", "name": "Webhook", "type": "n8n-nodes-base.webhook", "typeVersion": 2,
-      "position": [ -1200, 400 ], "webhookId": "leadvyne-bot"
-    },
-    {
-      "parameters": { "respondWith": "json", "responseBody": "={ \"ok\": true }", "options": {} },
-      "id": "ack", "name": "Respond ACK", "type": "n8n-nodes-base.respondToWebhook", "typeVersion": 1.1,
-      "position": [ -1200, 560 ]
+      "parameters": {},
+      "id": "trigger", "name": "When called by wrapper", "type": "n8n-nodes-base.executeWorkflowTrigger", "typeVersion": 1.1,
+      "position": [ -1200, 400 ]
     },
     {
       "parameters": {
-        "jsCode": "const raw = $input.first().json;\nconst b = raw.body || raw;\nif (b.message_type && b.message_type !== 'incoming') return [];\nif (b.private) return [];\n\nconst conv = b.conversation || {};\nconst sender = conv?.meta?.sender || b.sender || {};\nlet phone = (sender.phone_number || sender.identifier || '').replace(/[^0-9+]/g,'').replace(/^\\+/,'');\nif (phone.startsWith('00')) phone = phone.slice(2);\n\nconst atts = b.attachments || b.message?.attachments || [];\nlet mediaType = 'text', mediaUrl = '';\nif (atts.length) {\n  const a = atts[0];\n  mediaUrl = a.data_url || a.file_url || '';\n  if ((a.file_type||'').includes('audio')) mediaType = 'voice';\n  else if ((a.file_type||'').includes('image')) mediaType = 'image';\n}\n\nconst text = (b.content || b.message?.content || '').trim();\nif (!phone) return [];\nif (mediaType === 'text' && !text) return [];\n\nreturn [{ json: {\n  account_id: String(b.account?.id || conv?.account_id || ''),\n  inbox_id:   String(b.inbox?.id || conv?.inbox_id || ''),\n  convId:     conv?.id || null,\n  phone, name: sender.name || '', text, mediaType, mediaUrl\n} }];"
+        "jsCode": "const raw = $input.first().json;\nconst b = raw.body || raw;\nif (b.message_type && b.message_type !== 'incoming') return [];\nif (b.private) return [];\n\nconst conv = b.conversation || {};\nconst sender = conv?.meta?.sender || b.sender || {};\nlet phone = (sender.phone_number || sender.identifier || '').replace(/[^0-9+]/g,'').replace(/^\\+/,'');\nif (phone.startsWith('00')) phone = phone.slice(2);\n\nconst atts = b.attachments || b.message?.attachments || [];\nlet mediaType = 'text', mediaUrl = '';\nif (atts.length) {\n  const a = atts[0];\n  mediaUrl = a.data_url || a.file_url || '';\n  if ((a.file_type||'').includes('audio')) mediaType = 'voice';\n  else if ((a.file_type||'').includes('image')) mediaType = 'image';\n}\n\nconst text = (b.content || b.message?.content || '').trim();\nif (!phone) return [];\nif (mediaType === 'text' && !text) return [];\n\nreturn [{ json: {\n  client_id:  String(raw.client_id || b.client_id || ''),\n  account_id: String(b.account?.id || conv?.account_id || ''),\n  inbox_id:   String(b.inbox?.id || conv?.inbox_id || ''),\n  convId:     conv?.id || null,\n  phone, name: sender.name || '', text, mediaType, mediaUrl\n} }];"
       },
       "id": "parse", "name": "Code · Parse", "type": "n8n-nodes-base.code", "typeVersion": 2,
       "position": [ -980, 400 ]
@@ -23,7 +18,7 @@
         "authentication": "nocoDbApiToken", "operation": "getAll",
         "workspaceId": "REPLACE_CONTROL_WORKSPACE", "projectId": "REPLACE_CONTROL_PROJECT",
         "table": "REPLACE_CLIENTS_TABLE", "limit": 1,
-        "options": { "where": "=(chatwoot_inbox_id,eq,{{ $json.inbox_id }})~and(active,eq,Yes)" }
+        "options": { "where": "=(Id,eq,{{ $json.client_id }})" }
       },
       "id": "tenant", "name": "NocoDB · Get tenant", "type": "n8n-nodes-base.nocoDb", "typeVersion": 3,
       "position": [ -760, 400 ], "alwaysOutputData": true,
@@ -237,7 +232,7 @@
     },
     {
       "parameters": {
-        "content": "## Common multi-tenant bot\n\nOne webhook for every client: **/webhook/leadvyne-bot**. Routing is by **chatwoot_inbox_id** → looked up in the clients table.\n\n**Key design:** tenant tokens are injected into HTTP headers from the config row — NOT n8n credentials. The only fixed credential is the master NocoDB token on **Get tenant** (reads the clients table).\n\n**Set these 3 placeholders** on the *Get tenant* node: REPLACE_CONTROL_WORKSPACE / PROJECT / CLIENTS_TABLE.\n\n**Media:** image → Gemini vision (works via data_url). Voice → download + Gemini transcribe; if your model/endpoint doesn't accept ogg audio, swap *HTTP · Transcribe* for your STT (Whisper / Google STT). Falls back to a placeholder so the flow never breaks.",
+        "content": "## Shared engine (sub-workflow)\n\nCalled by each client's thin wrapper via Execute Workflow, receiving the Chatwoot payload + **client_id**. Looks up that client's config row (by Id) and runs everything: parse, intent, flow, send, lead update.\n\n**Key design:** tenant tokens are injected into HTTP headers from the config row — NOT n8n credentials. The only fixed credential is the master NocoDB token on *Get tenant* (reads the clients table).\n\n**Set the 3 placeholders** on *Get tenant*: REPLACE_CONTROL_WORKSPACE / PROJECT / CLIENTS_TABLE.\n\n**Media:** image → Gemini vision (via data_url). Voice → download + Gemini transcribe; swap *HTTP · Transcribe* for your STT if ogg audio isn't accepted. Falls back gracefully.\n\nNote this workflow's id → paste it into the onboard workflow's Settings (engine_workflow_id).",
         "height": 360, "width": 460
       },
       "id": "note", "name": "README", "type": "n8n-nodes-base.stickyNote", "typeVersion": 1,
@@ -245,7 +240,7 @@
     }
   ],
   "connections": {
-    "Webhook": { "main": [ [ { "node": "Code · Parse", "type": "main", "index": 0 }, { "node": "Respond ACK", "type": "main", "index": 0 } ] ] },
+    "When called by wrapper": { "main": [ [ { "node": "Code · Parse", "type": "main", "index": 0 } ] ] },
     "Code · Parse": { "main": [ [ { "node": "NocoDB · Get tenant", "type": "main", "index": 0 } ] ] },
     "NocoDB · Get tenant": { "main": [ [ { "node": "Code · Build ctx", "type": "main", "index": 0 } ] ] },
     "Code · Build ctx": { "main": [ [ { "node": "HTTP · Get lead", "type": "main", "index": 0 } ] ] },

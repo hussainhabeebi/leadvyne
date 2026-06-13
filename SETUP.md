@@ -1,91 +1,87 @@
-# Leadvyne SaaS — multi-tenant setup
+# Leadvyne — self-provisioning setup (option B)
 
-Onboard clients from a front-end → one shared bot workflow serves all of them, routed by
-Chatwoot inbox id. No per-client workflow, no per-client deploy.
+Front-end (login-gated) → onboard workflow → **creates and activates a dedicated bot workflow
+per client via the n8n API** → returns the Chatwoot webhook URL. Each client gets a thin wrapper
+that calls one shared engine. Fix logic once in the engine; clients never drift.
 
 ```
-leadvyne-onboarding.html  → POST → n8n/onboard.json  → writes a row to the CLIENTS table
-                                                          │
-Chatwoot (any client) ── webhook ──► n8n/bot-common.json ─┤ looks up tenant by inbox id
-                                                          │ runs intent + flow + reply (text/voice/image)
-                                                          └ reads/writes that tenant's leads table
-n8n/followup-template.json → clone per client for scheduled nudges
+frontend/index.html ──POST──► n8n: onboard.json
+                                  │ checks passcode
+                                  │ writes clients-table row  (NocoDB master)
+                                  │ POST /api/v1/workflows     (creates wrapper)
+                                  │ POST .../activate
+                                  └ returns webhook_url
+wrapper (per client) ── Execute Workflow ──► engine.json (shared logic: text/voice/image)
+followup-template.json  → clone per client for scheduled nudges
 ```
 
-## 1. Create the CLIENTS config table (NocoDB)
+## 1. CLIENTS config table (NocoDB control plane)
+One table holding every client's config. Read with your **master** NocoDB token.
 
-This is your **control plane** — one table holding every client's config. Read by all three
-workflows using your **master** NocoDB token (the only fixed credential).
+| Field | Type |
+|---|---|
+| client_name | Single line |
+| chatwoot_account_id | Single line |
+| chatwoot_inbox_id | Single line |
+| chatwoot_base | Single line |
+| chatwoot_token | Single line |
+| nocodb_base | Single line |
+| leads_table_id | Single line |
+| nocodb_token | Single line |
+| openrouter_key | Single line |
+| model | Single line |
+| language | Single line |
+| main_prompt | Long text |
+| flow_json | Long text |
+| followup_count | Number |
+| followup_hours | Single line |
+| followup_messages | Long text |
+| active | Single line |
 
-| Field | Type | Notes |
-|---|---|---|
-| client_name | Single line | |
-| chatwoot_account_id | Single line | **routing** |
-| chatwoot_inbox_id | Single line | **routing key — must be unique per client** |
-| chatwoot_base | Single line | e.g. https://app.aiingo.com |
-| chatwoot_token | Single line | that client's Chatwoot API token |
-| nocodb_base | Single line | where the client's leads live |
-| leads_table_id | Single line | the client's leads table id |
-| nocodb_token | Single line | token for the client's leads table |
-| openrouter_key | Single line | (can be a shared key) |
-| model | Single line | google/gemini-2.5-flash |
-| language | Single line | ml / en / hi / ta / mix |
-| main_prompt | Long text | the FAQ agent persona + guardrails |
-| flow_json | Long text | the state machine (JSON string) |
-| followup_count | Number | |
-| followup_hours | Single line | "24,72,168" |
-| followup_messages | Long text | one per line |
-| active | Single line | "Yes" / "No" |
+## 2. Create the n8n API key + credential
+1. In n8n: **Settings → n8n API → Create API key**. Copy it.
+2. **Credentials → New → Header Auth**, name it **n8n API**, header name `X-N8N-API-KEY`,
+   value = the key. (This is the "API I will provide in config".)
+   The key lives only here — never in the front-end, never shared.
 
-Note the workspace id, project id, and table id — you'll paste them into the workflows.
+## 3. Import workflows (in this order)
+1. **engine.json** — set the 3 `REPLACE_CONTROL_*` placeholders (clients table) + master NocoDB
+   credential. Save. **Copy its workflow id** from the URL.
+2. **onboard.json** —
+   - `Set · Settings`: `REPLACE_PASSCODE` (your access passcode), `REPLACE_ENGINE_WORKFLOW_ID`
+     (the engine id from step 1). n8n_base is already `https://n8n.aiautomationsuae.com`.
+   - `NocoDB · Create client`: clients-table ids + master credential.
+   - `HTTP · Create workflow` and `HTTP · Activate workflow`: select the **n8n API** credential.
+   - Activate the workflow.
+3. **followup-template.json** — clone per client for nudges (low volume; per-client is fine).
 
-## 2. Import the workflows
+## 4. Deploy the front-end
+It's a static site. On Coolify: new app → this repo → it uses the `Dockerfile` (nginx) to serve
+`frontend/`. Or open `frontend/index.html` locally. The onboard endpoint defaults to
+`https://n8n.aiautomationsuae.com/webhook/leadvyne-onboard`.
 
-In each, set the three `REPLACE_CONTROL_*` placeholders to your CLIENTS table location, and
-make sure the **master** NocoDB credential is selected on the nodes that read it.
+## 5. Use it
+Open the page → enter the **passcode** → fill the form → **Provision client**. It writes the
+config, creates + activates that client's workflow, and shows the webhook URL. Paste that URL
+into the client's Chatwoot inbox (**Configuration → Webhooks**, event **Message created**).
 
-- **onboard.json** — webhook `/webhook/leadvyne-onboard`. CORS is open (`*`) so the page can post.
-- **bot-common.json** — webhook `/webhook/leadvyne-bot`. This is the URL every client pastes.
-- **followup-template.json** — clone per client (follow-ups are low volume; per-client is fine here).
+## Security notes
+- The passcode is checked server-side in the onboard workflow; the page only collects it.
+  For stronger protection, also put Coolify Basic Auth in front of the static site.
+- Tokens entered in the form are sent to your onboard webhook over HTTPS and stored in your
+  NocoDB. The n8n API key never touches the browser.
+- Set the onboard webhook CORS (already `*` in the JSON) to your page origin once it's hosted.
 
-## 3. The key design: why one workflow works for all
+## Per-client customization (Mix 1)
+- **Config** — edit that client's row (flow, prompt, follow-ups). No workflow edit.
+- **Wrapper** — open that client's generated workflow; add nodes around `Run engine`
+  (there's a comment marking where). Isolated to that client.
+- **Custom logic** — give the engine a `custom_subworkflow_id` branch for a one-off client.
+- Never hardcode a client inside the shared engine — keep it generic and config-driven.
 
-n8n **credentials can't be chosen from a database field**. So `bot-common.json` does NOT use
-NocoDB/credential nodes for client calls. It uses plain **HTTP Request** nodes and injects the
-tenant's token into the header from the config row, e.g.:
-
-- Chatwoot → `api_access_token: {{ $json.chatwoot_token }}`
-- NocoDB (leads) → `xc-token: {{ $json.nocodb_token }}`
-- OpenRouter → `Authorization: Bearer {{ $json.openrouter_key }}`
-
-The single fixed credential is the master NocoDB token on **Get tenant**, which reads the
-CLIENTS table. That's the whole trick that makes it multi-tenant.
-
-## 4. Onboard a client (the front-end)
-
-Open `leadvyne-onboarding.html`. Fill in basics, credentials, the main prompt, the flow
-(there's a *Load sample flow* button), and the follow-ups. Hit **Provision client**. It writes
-the config row and shows the one webhook URL.
-
-In that client's Chatwoot inbox → **Configuration → Webhooks** → add `…/webhook/leadvyne-bot`
-and subscribe to **Message created**. Done — routing is by inbox id, same URL for everyone.
-
-> Host the HTML anywhere (Coolify static, or open locally). It posts to the onboard webhook,
-> so the NocoDB token is never exposed in the browser.
-
-## 5. Media: text / voice / image
-
-- **Text** — straight through.
-- **Image** — sent to Gemini vision via the attachment URL; the description becomes the message.
-- **Voice** — downloaded, then transcribed by Gemini. WhatsApp voice is ogg/opus. If your model
-  or endpoint rejects the audio, swap the **HTTP · Transcribe** node for your STT of choice
-  (Whisper, Google STT). It falls back to a placeholder so the conversation never stalls.
-
-## Tuning notes (be aware)
-- `bot-common.json` is a working foundation. Test each branch once in n8n and adjust expressions
-  for your exact Chatwoot payload (attachment field names vary slightly by channel).
-- Inbox ids must be unique across clients in the CLIENTS table, or routing is ambiguous.
-- For follow-ups beyond WhatsApp's 24-hour window, the send must be an approved **template**,
-  not free text — see the sticky note in `followup-template.json`.
-- This is the n8n-runtime version. The code-engine version (separate repo) is the alternative
-  runtime; both read the same kind of per-client config.
+## Tuning
+- `engine.json` is a working foundation — test each media branch once; Chatwoot attachment
+  field names vary slightly by channel. WhatsApp voice is ogg/opus; swap the transcribe node
+  for your STT if needed.
+- Confirm the n8n API response shape for the created workflow id (`id` vs `data.id`) — the
+  activate node handles both.
