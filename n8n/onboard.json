@@ -1,0 +1,85 @@
+{
+  "name": "Leadvyne · Onboard (writes clients table)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "leadvyne-onboard",
+        "responseMode": "responseNode",
+        "options": { "allowedOrigins": "*" }
+      },
+      "id": "wh-onboard",
+      "name": "Webhook · Onboard",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [ -480, 300 ],
+      "webhookId": "leadvyne-onboard"
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || $input.first().json;\nreturn [{ json: {\n  client_name:        b.client_name || '',\n  chatwoot_account_id:String(b.chatwoot_account_id || ''),\n  chatwoot_inbox_id:  String(b.chatwoot_inbox_id || ''),\n  chatwoot_base:      b.chatwoot_base || '',\n  chatwoot_token:     b.chatwoot_token || '',\n  nocodb_base:        b.nocodb_base || '',\n  leads_table_id:     b.leads_table_id || '',\n  nocodb_token:       b.nocodb_token || '',\n  openrouter_key:     b.openrouter_key || '',\n  model:              b.model || 'google/gemini-2.5-flash',\n  language:           b.language || 'ml',\n  main_prompt:        b.main_prompt || '',\n  flow_json:          typeof b.flow_json === 'string' ? b.flow_json : JSON.stringify(b.flow_json || {}),\n  followup_count:     parseInt(b.followup_count || 0),\n  followup_hours:     b.followup_hours || '',\n  followup_messages:  b.followup_messages || '',\n  active:             'Yes'\n} }];"
+      },
+      "id": "code-onboard",
+      "name": "Code · Normalise",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [ -260, 300 ]
+    },
+    {
+      "parameters": {
+        "authentication": "nocoDbApiToken",
+        "operation": "create",
+        "workspaceId": "REPLACE_CONTROL_WORKSPACE",
+        "projectId": "REPLACE_CONTROL_PROJECT",
+        "table": "REPLACE_CLIENTS_TABLE",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldName": "client_name",        "fieldValue": "={{ $json.client_name }}" },
+            { "fieldName": "chatwoot_account_id", "fieldValue": "={{ $json.chatwoot_account_id }}" },
+            { "fieldName": "chatwoot_inbox_id",   "fieldValue": "={{ $json.chatwoot_inbox_id }}" },
+            { "fieldName": "chatwoot_base",       "fieldValue": "={{ $json.chatwoot_base }}" },
+            { "fieldName": "chatwoot_token",      "fieldValue": "={{ $json.chatwoot_token }}" },
+            { "fieldName": "nocodb_base",         "fieldValue": "={{ $json.nocodb_base }}" },
+            { "fieldName": "leads_table_id",      "fieldValue": "={{ $json.leads_table_id }}" },
+            { "fieldName": "nocodb_token",        "fieldValue": "={{ $json.nocodb_token }}" },
+            { "fieldName": "openrouter_key",      "fieldValue": "={{ $json.openrouter_key }}" },
+            { "fieldName": "model",               "fieldValue": "={{ $json.model }}" },
+            { "fieldName": "language",            "fieldValue": "={{ $json.language }}" },
+            { "fieldName": "main_prompt",         "fieldValue": "={{ $json.main_prompt }}" },
+            { "fieldName": "flow_json",           "fieldValue": "={{ $json.flow_json }}" },
+            { "fieldName": "followup_count",      "fieldValue": "={{ $json.followup_count }}" },
+            { "fieldName": "followup_hours",      "fieldValue": "={{ $json.followup_hours }}" },
+            { "fieldName": "followup_messages",   "fieldValue": "={{ $json.followup_messages }}" },
+            { "fieldName": "active",              "fieldValue": "Yes" }
+          ]
+        }
+      },
+      "id": "noco-create",
+      "name": "NocoDB · Create client",
+      "type": "n8n-nodes-base.nocoDb",
+      "typeVersion": 3,
+      "position": [ -40, 300 ],
+      "credentials": {
+        "nocoDbApiToken": { "id": "KL3kUVZOFL1V0mAd", "name": "NocoDB Token account" }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"ok\": true, \"client\": \"{{ $('Code · Normalise').first().json.client_name }}\" }",
+        "options": {}
+      },
+      "id": "respond",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [ 180, 300 ]
+    }
+  ],
+  "connections": {
+    "Webhook · Onboard": { "main": [ [ { "node": "Code · Normalise", "type": "main", "index": 0 } ] ] },
+    "Code · Normalise": { "main": [ [ { "node": "NocoDB · Create client", "type": "main", "index": 0 } ] ] },
+    "NocoDB · Create client": { "main": [ [ { "node": "Respond", "type": "main", "index": 0 } ] ] }
+  },
+  "settings": { "executionOrder": "v1" }
+}
