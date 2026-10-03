@@ -36,6 +36,8 @@ One table holding every client's config. Read with your **master** NocoDB token.
 | followup_count | Number |
 | followup_hours | Single line |
 | followup_messages | Long text |
+| flypoomas_agent_number | Single line |
+| flypoomas_currency | Single line |
 | active | Single line |
 
 ## 2. Create the n8n API key + credential
@@ -85,3 +87,31 @@ into the client's Chatwoot inbox (**Configuration → Webhooks**, event **Messag
   for your STT if needed.
 - Confirm the n8n API response shape for the created workflow id (`id` vs `data.id`) — the
   activate node handles both.
+
+## FlyPoomas agent number (travel agency clients)
+
+Travel agencies selling FlyPoomas flights get a **FlyPoomas agent number** (e.g. `FPA10023`) when
+FlyPoomas Admin creates their agency account (Admin → **Leadvyne agencies**). Enter it in the
+onboarding form (section 01). The form checks it with FlyPoomas and stores the number and the
+agency's currency (`flypoomas_agent_number`, `flypoomas_currency`) in the client's row, so the
+engine has them in every run as `{{ $json.flypoomas_agent_number }}`.
+
+On every n8n HTTP node that calls FlyPoomas for this client, send the number:
+
+| Call | How |
+|---|---|
+| `POST https://api.flypoomas.com/api/search` | header `X-FP-Agent: {{ $json.flypoomas_agent_number }}` (or `"agentNumber"` in the JSON body) |
+| `POST https://api.flypoomas.com/api/integrations/checkout-sessions` | same header (or `"agentNumber"` in the body) |
+
+What FlyPoomas does with it:
+- **Currency** — search results add `agentCurrency` and an `agentPrice: { amount, currency }` per
+  fare in the agency's currency (AED, SAR, QAR, OMR, KWD, BHD, INR or USD, live exchange rates);
+  checkout links open the booking page in that currency.
+- **Analytics** — every search, checkout link and booking is counted for the agency
+  (FlyPoomas Admin → Leadvyne agencies). Leadvyne can read the same numbers:
+  `GET /api/integrations/agents/FPA10023/stats?days=30` with header `X-POOMAS-INTEGRATION-KEY`.
+- An unknown or inactive number never blocks a customer: the checkout link is created untagged and
+  the response carries a `warning`.
+
+Leave the field empty for clients that are not FlyPoomas agencies.
+

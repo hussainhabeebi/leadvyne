@@ -51,6 +51,8 @@
 
   label{display:block;font-size:12px;font-weight:600;margin:0 0 5px}
   label .hint{font-weight:400;color:var(--muted)}
+  .fpa-status{font-family:var(--mono);font-size:12px;margin-top:6px;min-height:16px;color:var(--muted)}
+  .fpa-status.ok{color:var(--accent-ink)} .fpa-status.bad{color:#B42318}
   input,textarea,select{width:100%;background:#FBFCFC;border:1px solid var(--line-strong);border-radius:8px;padding:10px 12px;font-size:14px;color:var(--ink);font-family:var(--body);transition:border-color .12s,box-shadow .12s}
   input.mono,textarea.mono{font-family:var(--mono);font-size:13px}
   textarea{resize:vertical;min-height:84px;line-height:1.55}
@@ -117,7 +119,7 @@
   <form id="form" autocomplete="off">
     <section class="card">
       <div class="sec-head"><span class="sec-num">01</span><h2 class="sec-title">Client</h2></div>
-      <p class="sec-note">Identity and default language.</p>
+      <p class="sec-note">Identity, default language and the client's FlyPoomas agent number (travel agencies).</p>
       <div class="grid">
         <div><label>Client name</label><input name="client_name" required placeholder="Safe Assets" /></div>
         <div><label>Default language</label>
@@ -126,6 +128,11 @@
             <option value="hi">Hindi (hi)</option><option value="ta">Tamil (ta)</option>
             <option value="mix">Mixed (mix)</option>
           </select>
+        </div>
+        <div><label>FlyPoomas agent number <span class="hint">(optional · e.g. FPA10023)</span></label>
+          <input name="flypoomas_agent_number" class="mono" placeholder="FPA10023" pattern="[Ff][Pp][Aa][ -]?[0-9]{5,7}" autocomplete="off" />
+          <input type="hidden" name="flypoomas_currency" />
+          <div id="fpaStatus" class="fpa-status"></div>
         </div>
       </div>
     </section>
@@ -241,9 +248,35 @@ const SAMPLE_FLOW = {
 };
 $('#loadFlow').addEventListener('click',()=>{ form.flow_json.value = JSON.stringify(SAMPLE_FLOW,null,2); $('#flowErr').textContent=''; });
 
+// ---- FlyPoomas agent number: confirms the agency and reads its currency ----
+const FLYPOOMAS_API = 'https://api.flypoomas.com';
+let fpaSeq = 0;
+async function checkAgentNumber(){
+  const el = form.flypoomas_agent_number, st = $('#fpaStatus');
+  const n = el.value.toUpperCase().replace(/[\s-]/g,'');
+  form.flypoomas_currency.value = '';
+  if(!n){ st.textContent=''; st.className='fpa-status'; return true; }
+  el.value = n;
+  if(!/^FPA\d{5,7}$/.test(n)){ st.textContent='Agent numbers look like FPA10023.'; st.className='fpa-status bad'; return false; }
+  const seq = ++fpaSeq; st.textContent='Checking with FlyPoomas…'; st.className='fpa-status';
+  try{
+    const r = await fetch(FLYPOOMAS_API+'/api/agent-public/agent-number/'+encodeURIComponent(n),{headers:{'x-tenant-slug':'poomas'}});
+    const d = await r.json().catch(()=>({}));
+    if(seq!==fpaSeq) return true;
+    if(!r.ok||!d.valid){ st.textContent='Not an active FlyPoomas agency number.'; st.className='fpa-status bad'; return false; }
+    form.flypoomas_currency.value = d.currency;
+    st.textContent='✓ '+d.businessName+' · prices in '+d.currency; st.className='fpa-status ok'; return true;
+  }catch(e){
+    if(seq===fpaSeq){ st.textContent='Could not reach FlyPoomas — saved unchecked.'; st.className='fpa-status'; }
+    return true;
+  }
+}
+form.flypoomas_agent_number.addEventListener('blur',checkAgentNumber);
+
 function collect(){
   const d = Object.fromEntries(new FormData(form).entries());
   d.followup_count = parseInt(d.followup_count||'0');
+  d.flypoomas_agent_number = (d.flypoomas_agent_number||'').toUpperCase().replace(/[\s-]/g,'');
   d.passcode = AUTH;
   return d;
 }
@@ -259,6 +292,7 @@ form.addEventListener('submit',async e=>{
   e.preventDefault();
   if(!AUTH){ $('#gate').classList.remove('hidden'); return; }
   if(!validateFlow()){ $('#formMsg').textContent='Fix the flow JSON first.'; $('#formMsg').className='msg err'; return; }
+  if(!(await checkAgentNumber())){ $('#formMsg').textContent='Fix the FlyPoomas agent number (or leave it empty).'; $('#formMsg').className='msg err'; return; }
   const btn=$('#submitBtn'); btn.disabled=true; btn.textContent='Provisioning…';
   $('#formMsg').textContent=''; $('#formMsg').className='msg';
   try{
@@ -278,7 +312,8 @@ form.addEventListener('submit',async e=>{
 function showResult(d, resp){
   $('#rName').textContent = d.client_name || 'Client';
   $('#rHook').textContent = resp.webhook_url || '(returned by workflow)';
-  $('#rRoute').textContent = 'account '+d.chatwoot_account_id+' · inbox '+d.chatwoot_inbox_id;
+  $('#rRoute').textContent = 'account '+d.chatwoot_account_id+' · inbox '+d.chatwoot_inbox_id
+    + (d.flypoomas_agent_number ? ' · FlyPoomas '+d.flypoomas_agent_number+(d.flypoomas_currency?' ('+d.flypoomas_currency+')':'') : '');
   $('#result').classList.add('show');
   $('#result').scrollIntoView({behavior:'smooth',block:'start'});
 }
