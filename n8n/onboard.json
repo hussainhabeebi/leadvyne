@@ -57,6 +57,8 @@
           { "fieldName": "followup_count",      "fieldValue": "={{ $('Webhook · Onboard').first().json.body.followup_count }}" },
           { "fieldName": "followup_hours",      "fieldValue": "={{ $('Webhook · Onboard').first().json.body.followup_hours }}" },
           { "fieldName": "followup_messages",   "fieldValue": "={{ $('Webhook · Onboard').first().json.body.followup_messages }}" },
+          { "fieldName": "flypoomas_agent_number", "fieldValue": "={{ $('Webhook · Onboard').first().json.body.flypoomas_agent_number || '' }}" },
+          { "fieldName": "flypoomas_currency",  "fieldValue": "={{ $('Webhook · Onboard').first().json.body.flypoomas_currency || '' }}" },
           { "fieldName": "active",              "fieldValue": "Yes" }
         ] }
       },
